@@ -1,5 +1,16 @@
 <template>
 	<view class="blog-container">
+		<!-- 图片预览弹窗 -->
+		<view class="image-preview-modal" v-if="showImagePreview" @click="closeImagePreview">
+			<image 
+				class="preview-image" 
+				:src="previewImageUrl" 
+				mode="aspectFit"
+				@click.stop
+			></image>
+			<view class="close-preview-btn" @click="closeImagePreview">×</view>
+		</view>
+		
 		<!-- 博客列表 -->
 		<scroll-view 
 			scroll-y 
@@ -22,6 +33,20 @@
 						@paste="onEditorPaste"
 						@keydown="handleKeyDown"
 					></div>
+					<view class="editor-toolbar">
+						<view class="toolbar-btn image-btn" @click="openImageSelector">
+							<image src="/static/imgs/image.svg" mode="aspectFit" class="toolbar-icon"></image>
+							<text class="toolbar-text">添加图片</text>
+						</view>
+						<view class="toolbar-actions">
+							<view class="toolbar-btn clear-btn" @click="clearEditor" v-if="newBlog.content || editingBlogId">
+								<text class="toolbar-text">清空</text>
+							</view>
+							<view class="toolbar-btn submit-btn" @click="submitBlog">
+								<text class="toolbar-text">{{ editingBlogId ? '更新' : '发布' }}</text>
+							</view>
+						</view>
+					</view>
 				</view>
 			</view>
 			
@@ -35,18 +60,21 @@
 			<!-- 博客列表 -->
 			<view 
 				v-for="(blog, index) in blogList" 
+				@click="toggleExpand(blog)"
 				:key="blog._id"
 				class="blog-item"
 				:class="{'fade-in': true, 'expanded': blog.isExpanded}"
 				:style="{'animation-delay': index * 0.1 + 's'}"
 			>
 				<view class="blog-content-wrapper" :class="{'expanded': blog.isExpanded}">
-					<view class="dblclick-catcher" @tap="toggleExpand(blog)"></view>
 					<div
+						@click="toggleExpand(blog)"
 						class="blog-content"
 						:ref="'content-' + blog._id"
+						:id="'blog-content-' + blog._id"
 						v-html="blog.content"
 					></div>
+					<div class="content-mask" @click.stop="toggleExpand(blog)" v-if="!blog.isExpanded && blog.needsMask"></div>
 				</view>
 				<view class="blog-footer">
 					<text class="blog-time">{{formatTime(blog.createTime)}}</text>
@@ -60,7 +88,7 @@
 						<view class="action-btn delete-icon" @tap.stop="confirmDelete(blog)">
 							<image src="/static/imgs/delete.svg" mode="aspectFit" class="action-icon"></image>
 						</view>
-						<view class="action-btn favorite-btn" @tap.stop="toggleFavorite(blog)">
+						<view class="action-btn favorite-btn" :style="blog.isFavorite ? {display: 'flex!important'} : {}" @tap.stop="toggleFavorite(blog)">
 							<image v-if="blog.isFavorite" src="/static/imgs/like_active.svg" mode="aspectFit" class="action-icon"></image>
 							<image v-else src="/static/imgs/like.svg" mode="aspectFit" class="action-icon"></image>
 						</view>
@@ -73,7 +101,7 @@
 
 <script>
 export default {
-	data() {
+		data() {
 		return {
 			newBlog: {
 				content: '',
@@ -85,24 +113,22 @@ export default {
 			scrollTop: 0,
 			isProcessingPaste: false,
 			editingBlogId: null, // 当前正在编辑的博客ID
-			// 测试数据
-			testContents: [
-				'今天天气真好，阳光明媚，心情愉悦！',
-				'分享一个有趣的小故事：从前有座山，山上有座庙...',
-				'最近在学习新的技术，感觉收获很多。',
-				'推荐一本好书：《活着》，非常值得一读。',
-				'周末去爬山，拍了很多美丽的照片。',
-				'今天做了一道新菜，味道不错！',
-				'分享一个编程小技巧，希望对大家有帮助。',
-				'记录一下今天的所思所想...',
-				'生活就像一杯茶，需要慢慢品味。',
-				'今天遇到一个有趣的人，聊了很多。'
-			],
-			lastTap: 0
+			pendingUploads: 0, // 正在上传的图片数量
+			showImagePreview: false, // 是否显示图片预览
+			previewImageUrl: '' // 预览图片的URL
 		}
 	},
 	onLoad() {
 		this.loadBlogs()
+	},
+	
+	mounted() {
+		// 在组件挂载后，初始化编辑器中的图片点击事件
+		this.setupEditorImagePreview();
+		// 初始化拖放功能
+		this.setupEditorDragDrop();
+		// 添加CSS动画
+		this.addCssAnimations();
 	},
 	methods: {
 		
@@ -115,16 +141,150 @@ export default {
 			}
 		},
 
-		previewImage(current) {
+		// 预览编辑器中的图片
+		previewEditorImage(current) {
+			// 获取编辑器元素
+			const editor = document.querySelector('.blog-editor');
+			if (!editor) return;
+			
+			// 获取编辑器中的所有图片URL
+			const images = Array.from(editor.querySelectorAll('img')).map(img => img.src);
+			if (!images.length) return;
+			
+			// 调用uni-app的图片预览API
 			uni.previewImage({
-				urls: this.newBlog.images,
-				current
+				urls: images,
+				current: current,
+				indicator: 'default', // 显示页码指示器
+				loop: true // 循环预览
+			});
+		},
+		
+		// 检查内容高度，决定是否需要遮罩层
+		checkContentHeight(blog) {
+			this.$nextTick(() => {
+				const contentEl = document.querySelector(`#blog-content-${blog._id}`);
+				if (!contentEl) return;
+				
+				// 获取内容实际高度
+				const contentHeight = contentEl.scrollHeight;
+				
+				// 如果内容高度超过200px，则需要遮罩层
+				blog.needsMask = contentHeight > 200;
+			});
+		},
+		
+		// 为博客内容中的图片添加点击事件
+		setupImagePreview(blog) {
+			// 使用nextTick确保DOM已更新
+			this.$nextTick(() => {
+				// 获取博客内容元素
+				const contentEl = document.querySelector(`#blog-content-${blog._id}`);
+				if (!contentEl) return;
+				
+				// 获取内容中的所有图片
+				const images = contentEl.querySelectorAll('img');
+				if (!images.length) {
+					// 如果没有图片，直接检查内容高度
+					this.checkContentHeight(blog);
+					return;
+				}
+				
+				// 为每个图片添加点击事件和加载事件
+				images.forEach(img => {
+					// 移除旧的事件监听器（如果有）
+					img.removeEventListener('click', this.handleImageClick);
+					
+					// 添加新的事件监听器
+					img.addEventListener('click', (e) => {
+						e.stopPropagation(); // 阻止事件冒泡，防止触发博客展开/收起
+						this.previewBlogImages(blog, img.src);
+					});
+					
+					// 添加样式，表明图片可点击
+					img.style.cursor = 'zoom-in';
+					
+					// 添加图片加载完成事件，重新检查内容高度
+					img.addEventListener('load', () => {
+						this.checkContentHeight(blog);
+					});
+				});
+				
+				// 初始检查内容高度
+				this.checkContentHeight(blog);
+			});
+		},
+		
+		// 为编辑器中的图片添加点击事件
+		setupEditorImagePreview() {
+			// 使用nextTick确保DOM已更新
+			this.$nextTick(() => {
+				// 获取编辑器元素
+				const editor = document.querySelector('.blog-editor');
+				if (!editor) return;
+				
+				// 获取编辑器中的所有图片
+				const images = editor.querySelectorAll('img');
+				if (!images.length) return;
+				
+				// 为每个图片添加点击事件
+				images.forEach(img => {
+					// 如果图片正在上传或上传失败，不添加预览功能
+					if (img.dataset.status === 'uploading' || img.dataset.status === 'failed') {
+						return;
+					}
+					
+					// 移除旧的事件监听器（如果有）
+					const oldClickHandler = img._clickHandler;
+					if (oldClickHandler) {
+						img.removeEventListener('click', oldClickHandler);
+					}
+					
+					// 创建新的事件处理函数
+					const clickHandler = (e) => {
+						e.stopPropagation(); // 阻止事件冒泡
+						this.previewEditorImage(img.src);
+					};
+					
+					// 保存事件处理函数引用，以便后续移除
+					img._clickHandler = clickHandler;
+					
+					// 添加新的事件监听器
+					img.addEventListener('click', clickHandler);
+					
+					// 添加样式，表明图片可点击
+					img.style.cursor = 'zoom-in';
+				});
+				
+				// 更新编辑器状态指示
+				this.updateEditorStatus();
+			});
+		},
+		
+		// 预览博客中的图片
+		previewBlogImages(blog, current) {
+			// 获取博客内容元素
+			const contentEl = document.querySelector(`#blog-content-${blog._id}`);
+			if (!contentEl) return;
+			
+			// 获取内容中的所有图片URL
+			const images = Array.from(contentEl.querySelectorAll('img')).map(img => img.src);
+			if (!images.length) return;
+			
+			// 调用uni-app的图片预览API
+			uni.previewImage({
+				urls: images,
+				current: current,
+				indicator: 'number', // 显示页码指示器
+				loop: true // 循环预览
 			});
 		},
 		
 		// 内容变化
 		onContentChange(e) {
 			this.newBlog.content = e.target.innerHTML;
+			// 在内容变化后，为编辑器中的图片添加点击事件
+			this.setupEditorImagePreview();
 		},
 		
 		// 处理编辑器粘贴事件
@@ -147,57 +307,639 @@ export default {
 			// 保存当前选区
 			const selection = window.getSelection();
 			const range = selection.getRangeAt(0);
+			
+			// 检查是否有图片
+			let hasImages = false;
+			for (let i = 0; i < items.length; i++) {
+				if (items[i].type.indexOf('image') !== -1) {
+					hasImages = true;
+					break;
+				}
+			}
+			
+			// 如果有图片，显示提示
+			if (hasImages) {
+				uni.showToast({
+					title: '正在处理图片...',
+					icon: 'loading',
+					duration: 1000
+				});
+			}
 
 			try {
 				for (let i = 0; i < items.length; i++) {
 					if (items[i].type.indexOf('image') !== -1) {
 						const file = items[i].getAsFile();
 						const reader = new FileReader();
-						await new Promise((resolve, reject) => {
-							reader.onloadend = async (e) => {
-								try {
-									const uploadResult = await uniCloud.uploadFile({
-										filePath: e.target.result,
-										cloudPath: `blog/${Date.now()}-${Math.random().toString(36).slice(-6)}.png`,
-										cloudPathAsRealPath: true,
-										fileType: 'image'
-									});
-
-									if (!existingImages.has(uploadResult.fileID)) {
-										const img = document.createElement('img');
-										img.src = uploadResult.fileID;
-										img.style.maxWidth = '100%';
-
-										// 在光标位置插入图片
-										range.deleteContents();
-										range.insertNode(img);
-
-										// 将光标移动到图片后面
-										range.setStartAfter(img);
-										range.setEndAfter(img);
-										selection.removeAllRanges();
-										selection.addRange(range);
-
-										existingImages.add(uploadResult.fileID);
-									}
-									resolve();
-								} catch (error) {
-									reject(error);
-								}
+						
+						// 创建一个唯一ID，用于标识这个图片
+						const imageId = `temp-image-${Date.now()}-${Math.random().toString(36).slice(-6)}`;
+						
+						await new Promise((resolve) => {
+							reader.onloadend = (e) => {
+								// 立即创建并插入图片预览
+								const img = document.createElement('img');
+								img.src = e.target.result; // 使用本地数据URL作为预览
+								img.id = imageId;
+								img.style.maxWidth = '100%';
+								img.dataset.status = 'uploading'; // 标记为正在上传
+								
+								// 添加上传中的视觉提示
+								img.style.filter = 'opacity(0.7)';
+								img.style.border = '2px dashed #ccc';
+								
+								// 在光标位置插入图片
+								const currentRange = selection.getRangeAt(0);
+								currentRange.deleteContents();
+								currentRange.insertNode(img);
+								
+								// 将光标移动到图片后面
+								currentRange.setStartAfter(img);
+								currentRange.setEndAfter(img);
+								selection.removeAllRanges();
+								selection.addRange(currentRange);
+								
+								// 为预览图片添加点击事件
+								this.setupEditorImagePreview();
+								
+								// 异步上传图片
+								this.uploadImageAsync(e.target.result, imageId);
+								
+								resolve();
 							};
+							
 							reader.readAsDataURL(file);
+						});
+					} else if (items[i].type === 'text/plain' || items[i].type === 'text/html') {
+						// 处理文本粘贴
+						items[i].getAsString((text) => {
+							// 如果是HTML，直接插入
+							if (items[i].type === 'text/html') {
+								// 创建临时div来清理HTML
+								const tempDiv = document.createElement('div');
+								tempDiv.innerHTML = text;
+								
+								// 插入清理后的HTML
+								document.execCommand('insertHTML', false, tempDiv.innerHTML);
+							} else {
+								// 纯文本，使用insertText命令
+								document.execCommand('insertText', false, text);
+							}
 						});
 					}
 				}
 			} catch (error) {
-				console.error('图片上传失败', error);
+				console.error('图片处理失败', error);
 				uni.showToast({
-					title: '图片上传失败',
+					title: '图片处理失败',
 					icon: 'none'
 				});
 			} finally {
 				this.isProcessingPaste = false;
+				
+				// 更新编辑器状态
+				this.updateEditorStatus();
 			}
+		},
+		
+		// 异步上传图片
+		async uploadImageAsync(dataUrl, imageId) {
+			// 增加待上传图片计数
+			this.pendingUploads++;
+			
+			try {
+				// 显示上传进度提示
+				const img = document.getElementById(imageId);
+				if (!img) {
+					this.pendingUploads--;
+					return;
+				}
+				
+				// 添加上传中的提示文本
+				const uploadingLabel = document.createElement('div');
+				uploadingLabel.id = `${imageId}-label`;
+				uploadingLabel.style.position = 'absolute';
+				uploadingLabel.style.top = '50%';
+				uploadingLabel.style.left = '50%';
+				uploadingLabel.style.transform = 'translate(-50%, -50%)';
+				uploadingLabel.style.background = 'rgba(0,0,0,0.5)';
+				uploadingLabel.style.color = 'white';
+				uploadingLabel.style.padding = '4px 8px';
+				uploadingLabel.style.borderRadius = '4px';
+				uploadingLabel.style.fontSize = '12px';
+				uploadingLabel.textContent = '上传中...';
+				
+				// 创建一个包装容器，使其成为相对定位的容器
+				const wrapper = document.createElement('div');
+				wrapper.id = `${imageId}-wrapper`;
+				wrapper.style.position = 'relative';
+				wrapper.style.display = 'inline-block';
+				
+				// 将图片包装在容器中
+				img.parentNode.insertBefore(wrapper, img);
+				wrapper.appendChild(img);
+				wrapper.appendChild(uploadingLabel);
+				
+				// 执行上传
+				const uploadResult = await uniCloud.uploadFile({
+					filePath: dataUrl,
+					cloudPath: `blog/${Date.now()}-${Math.random().toString(36).slice(-6)}.png`,
+					cloudPathAsRealPath: true,
+					fileType: 'image'
+				});
+				
+				// 上传成功，更新图片
+				if (img) {
+					img.src = uploadResult.fileID;
+					img.dataset.status = 'uploaded';
+					img.style.filter = '';
+					img.style.border = '';
+					
+					// 移除上传中的标签和包装器
+					const label = document.getElementById(`${imageId}-label`);
+					if (label) label.remove();
+					
+					// 将图片从包装器中取出并放回原位置
+					const wrapper = document.getElementById(`${imageId}-wrapper`);
+					if (wrapper && wrapper.parentNode) {
+						wrapper.parentNode.insertBefore(img, wrapper);
+						wrapper.remove();
+					}
+				}
+				
+				// 重新设置图片点击事件
+				this.setupEditorImagePreview();
+				
+				// 显示上传成功提示（如果是第一张图片）
+				if (this.pendingUploads === 1) {
+					uni.showToast({
+						title: '图片上传成功',
+						icon: 'success',
+						duration: 1000
+					});
+				}
+				
+			} catch (error) {
+				console.error('图片上传失败', error);
+				
+				// 获取图片元素
+				const img = document.getElementById(imageId);
+				if (!img) {
+					this.pendingUploads--;
+					return;
+				}
+				
+				// 显示上传失败的视觉提示
+				img.style.filter = 'grayscale(100%)';
+				img.style.border = '2px solid #ff4d4f';
+				img.dataset.status = 'failed';
+				
+				// 更新或添加失败标签
+				let failLabel = document.getElementById(`${imageId}-label`);
+				if (failLabel) {
+					failLabel.textContent = '上传失败，点击重试';
+					failLabel.style.background = 'rgba(255,77,79,0.7)';
+				} else {
+					failLabel = document.createElement('div');
+					failLabel.id = `${imageId}-label`;
+					failLabel.style.position = 'absolute';
+					failLabel.style.top = '50%';
+					failLabel.style.left = '50%';
+					failLabel.style.transform = 'translate(-50%, -50%)';
+					failLabel.style.background = 'rgba(255,77,79,0.7)';
+					failLabel.style.color = 'white';
+					failLabel.style.padding = '4px 8px';
+					failLabel.style.borderRadius = '4px';
+					failLabel.style.fontSize = '12px';
+					failLabel.textContent = '上传失败，点击重试';
+					
+					// 确保有包装器
+					let wrapper = document.getElementById(`${imageId}-wrapper`);
+					if (!wrapper) {
+						wrapper = document.createElement('div');
+						wrapper.id = `${imageId}-wrapper`;
+						wrapper.style.position = 'relative';
+						wrapper.style.display = 'inline-block';
+						img.parentNode.insertBefore(wrapper, img);
+						wrapper.appendChild(img);
+					}
+					
+					wrapper.appendChild(failLabel);
+				}
+				
+				// 添加点击重试功能
+				img.onclick = (e) => {
+					e.stopPropagation();
+					// 重置状态为上传中
+					img.dataset.status = 'uploading';
+					this.uploadImageAsync(img.src, imageId);
+				};
+				
+				uni.showToast({
+					title: '图片上传失败，可点击图片重试',
+					icon: 'none',
+					duration: 2000
+				});
+			} finally {
+				// 减少待上传图片计数
+				this.pendingUploads--;
+				
+				// 更新编辑器状态指示
+				this.updateEditorStatus();
+			}
+		},
+		
+		// 更新编辑器状态
+		updateEditorStatus() {
+			// 获取提交按钮元素
+			const submitBtn = document.querySelector('.submit-btn');
+			if (!submitBtn) return;
+			
+			// 如果有图片正在上传，禁用提交按钮
+			if (this.pendingUploads > 0) {
+				submitBtn.style.opacity = '0.5';
+				submitBtn.style.pointerEvents = 'none';
+				
+				// 显示上传状态指示器
+				let statusIndicator = document.querySelector('.upload-status-indicator');
+				if (!statusIndicator) {
+					statusIndicator = document.createElement('div');
+					statusIndicator.className = 'upload-status-indicator';
+					const editor = document.querySelector('.blog-editor');
+					if (editor && editor.parentNode) {
+						editor.parentNode.insertBefore(statusIndicator, editor.nextSibling);
+					}
+				}
+				
+				// 创建加载图标
+				let loadingIcon = statusIndicator.querySelector('.loading-icon');
+				if (!loadingIcon) {
+					loadingIcon = document.createElement('span');
+					loadingIcon.className = 'loading-icon';
+					loadingIcon.style.display = 'inline-block';
+					loadingIcon.style.width = '16px';
+					loadingIcon.style.height = '16px';
+					loadingIcon.style.border = '2px solid #1890ff';
+					loadingIcon.style.borderTopColor = 'transparent';
+					loadingIcon.style.borderRadius = '50%';
+					loadingIcon.style.animation = 'spin 1s linear infinite';
+					loadingIcon.style.marginRight = '8px';
+					statusIndicator.prepend(loadingIcon);
+				}
+				
+				// 更新状态文本
+				statusIndicator.innerHTML = '';
+				statusIndicator.appendChild(loadingIcon);
+				statusIndicator.appendChild(document.createTextNode(`正在上传 ${this.pendingUploads} 张图片，请稍候...`));
+			} else {
+				// 恢复提交按钮
+				submitBtn.style.opacity = '1';
+				submitBtn.style.pointerEvents = 'auto';
+				
+				// 移除上传状态指示器
+				const statusIndicator = document.querySelector('.upload-status-indicator');
+				if (statusIndicator) {
+					statusIndicator.remove();
+				}
+			}
+		},
+		
+		// 设置编辑器的拖放功能
+		setupEditorDragDrop() {
+			const editor = document.querySelector('.blog-editor');
+			if (!editor) return;
+			
+			// 防止浏览器默认的拖放行为
+			editor.addEventListener('dragover', (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				editor.classList.add('drag-over');
+			});
+			
+			editor.addEventListener('dragleave', (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				editor.classList.remove('drag-over');
+			});
+			
+			editor.addEventListener('drop', async (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				editor.classList.remove('drag-over');
+				
+				// 检查是否有文件被拖放
+				if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+					const files = Array.from(e.dataTransfer.files);
+					const imageFiles = files.filter(file => file.type.startsWith('image/'));
+					
+					if (imageFiles.length === 0) {
+						uni.showToast({
+							title: '只支持拖放图片文件',
+							icon: 'none',
+							duration: 2000
+						});
+						return;
+					}
+					
+					// 显示拖放提示
+					let dragDropHint = document.querySelector('.drag-drop-hint');
+					if (!dragDropHint) {
+						dragDropHint = document.createElement('div');
+						dragDropHint.className = 'drag-drop-hint';
+						editor.parentNode.insertBefore(dragDropHint, editor.nextSibling);
+					}
+					dragDropHint.textContent = `正在处理 ${imageFiles.length} 张图片...`;
+					
+					// 处理每个图片文件
+					for (const file of imageFiles) {
+						try {
+							// 读取文件为DataURL
+							const dataUrl = await new Promise((resolve, reject) => {
+								const reader = new FileReader();
+								reader.onload = () => resolve(reader.result);
+								reader.onerror = reject;
+								reader.readAsDataURL(file);
+							});
+							
+							// 创建图片元素并插入到编辑器
+							const img = document.createElement('img');
+							img.id = `img-${Date.now()}-${Math.random().toString(36).slice(-6)}`;
+							img.src = dataUrl;
+							img.style.maxWidth = '100%';
+							img.style.height = 'auto';
+							img.style.margin = '10px 0';
+							img.dataset.status = 'uploading';
+							
+							// 获取光标位置并插入图片
+							const selection = window.getSelection();
+							if (selection.rangeCount > 0) {
+								const range = selection.getRangeAt(0);
+								range.insertNode(img);
+								
+								// 移动光标到图片后面
+								range.setStartAfter(img);
+								range.setEndAfter(img);
+								selection.removeAllRanges();
+								selection.addRange(range);
+								
+								// 确保图片后有一个换行
+								const br = document.createElement('br');
+								range.insertNode(br);
+								range.setStartAfter(br);
+								range.setEndAfter(br);
+								selection.removeAllRanges();
+								selection.addRange(range);
+							} else {
+								editor.appendChild(img);
+								editor.appendChild(document.createElement('br'));
+							}
+							
+							// 上传图片
+							this.uploadImageAsync(dataUrl, img.id);
+						} catch (error) {
+							console.error('处理拖放图片失败', error);
+							uni.showToast({
+								title: '处理图片失败',
+								icon: 'none',
+								duration: 2000
+							});
+						}
+					}
+					
+					// 移除拖放提示
+					setTimeout(() => {
+						if (dragDropHint && dragDropHint.parentNode) {
+							dragDropHint.parentNode.removeChild(dragDropHint);
+						}
+					}, 3000);
+				}
+			});
+			
+			// 添加拖放提示样式
+			const style = document.createElement('style');
+			style.textContent = `
+				.blog-editor.drag-over {
+					background-color: rgba(24, 144, 255, 0.1) !important;
+					border: 2px dashed #1890ff !important;
+				}
+			`;
+			document.head.appendChild(style);
+		},
+		
+		// 设置编辑器图片预览功能
+		setupEditorImagePreview() {
+			const editor = document.querySelector('.blog-editor');
+			if (!editor) return;
+			
+			const images = editor.querySelectorAll('img');
+			images.forEach(img => {
+				// 跳过上传失败的图片，因为它们有自己的点击重试功能
+				if (img.dataset.status === 'failed') return;
+				
+				// 先移除所有已绑定的事件（防止重复绑定）
+				img.onclick = null;
+				img.removeEventListener('_previewClick', img._previewClickHandler || (()=>{}));
+				
+				// 添加新的点击事件用于预览
+				const clickHandler = (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					
+					// 设置预览图片URL
+					this.previewImageUrl = img.src;
+					this.showImagePreview = true;
+				};
+				img._previewClickHandler = clickHandler;
+				img.addEventListener('click', clickHandler);
+				
+				// 添加鼠标悬停效果
+				img.style.cursor = 'pointer';
+				img.title = '点击查看大图';
+			});
+		},
+		
+		// 关闭图片预览
+		closeImagePreview() {
+			this.showImagePreview = false;
+			this.previewImageUrl = '';
+		},
+		
+		// 更新编辑器状态指示
+		updateEditorStatus() {
+			const editor = document.querySelector('.blog-editor');
+			if (!editor) return;
+			
+			// 获取编辑器容器
+			const editorContainer = editor.closest('.editor');
+			if (!editorContainer) return;
+			
+			// 如果有正在上传的图片，显示状态指示
+			if (this.pendingUploads > 0) {
+				// 检查是否已存在状态指示器
+				let statusIndicator = editorContainer.querySelector('.upload-status-indicator');
+				if (!statusIndicator) {
+					// 创建状态指示器
+					statusIndicator = document.createElement('div');
+					statusIndicator.className = 'upload-status-indicator';
+					statusIndicator.style.padding = '4px 8px';
+					statusIndicator.style.backgroundColor = '#e6f7ff';
+					statusIndicator.style.borderRadius = '4px';
+					statusIndicator.style.fontSize = '12px';
+					statusIndicator.style.color = '#1890ff';
+					statusIndicator.style.marginTop = '8px';
+					statusIndicator.style.display = 'flex';
+					statusIndicator.style.alignItems = 'center';
+					
+					// 添加到编辑器容器
+					editorContainer.appendChild(statusIndicator);
+				}
+				
+				// 更新状态文本
+				statusIndicator.innerHTML = `
+					<span style="display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #1890ff; border-top-color: transparent; margin-right: 8px; animation: spin 1s linear infinite;"></span>
+					正在上传 ${this.pendingUploads} 张图片...
+				`;
+				
+				// 添加旋转动画样式
+				if (!document.getElementById('upload-spinner-style')) {
+					const style = document.createElement('style');
+					style.id = 'upload-spinner-style';
+					style.textContent = `
+						@keyframes spin {
+							0% { transform: rotate(0deg); }
+							100% { transform: rotate(360deg); }
+						}
+					`;
+					document.head.appendChild(style);
+				}
+			} else {
+				// 移除状态指示器
+				const statusIndicator = editorContainer.querySelector('.upload-status-indicator');
+				if (statusIndicator) {
+					statusIndicator.remove();
+				}
+			}
+		},
+		
+		// 添加CSS动画
+		addCssAnimations() {
+			// 检查是否已存在动画样式
+			if (document.getElementById('blog-animations')) return;
+		
+			// 创建样式元素
+			const style = document.createElement('style');
+			style.id = 'blog-animations';
+		
+			// 添加动画样式
+			style.textContent = `
+				@keyframes fadeIn {
+					from {
+						opacity: 0;
+						transform: translateY(20px);
+					}
+					to {
+						opacity: 1;
+						transform: translateY(0);
+					}
+				}
+			
+				@keyframes spin {
+					0% { transform: rotate(0deg); }
+					100% { transform: rotate(360deg); }
+				}
+			
+				@keyframes pulse {
+					0% { transform: scale(1); }
+					50% { transform: scale(1.05); }
+					100% { transform: scale(1); }
+				}
+			
+				.fade-in {
+					animation: fadeIn 0.5s ease forwards;
+				}
+			
+				.loading-icon {
+					animation: spin 1s linear infinite;
+				}
+			
+				.pulse {
+					animation: pulse 1.5s ease infinite;
+				}
+			
+				.blog-editor img {
+					transition: all 0.3s ease;
+				}
+			
+				.blog-editor img:hover {
+					transform: scale(1.02);
+					box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+				}
+			`;
+		
+			// 添加到文档头部
+			document.head.appendChild(style);
+		},
+		
+		// 打开图片选择器
+		openImageSelector() {
+			// 使用uni-app的选择图片API
+			uni.chooseImage({
+				count: 9, // 最多可选择的图片数量
+				sizeType: ['original', 'compressed'], // 可选择原图或压缩图
+				sourceType: ['album', 'camera'], // 可选择性开放访问相册、相机
+				success: (res) => {
+					// 获取选择的图片临时路径
+					const tempFilePaths = res.tempFilePaths;
+					
+					// 显示处理提示
+					if (tempFilePaths.length > 0) {
+						uni.showToast({
+							title: '正在处理图片...',
+							icon: 'loading',
+							duration: 1000
+						});
+					}
+					
+					// 保存当前选区
+					const selection = window.getSelection();
+					const range = selection.getRangeAt(0);
+					const savedRange = range.cloneRange();
+					
+					// 处理选择的图片
+					tempFilePaths.forEach((path, index) => {
+						// 创建一个唯一ID，用于标识这个图片
+						const imageId = `select-image-${Date.now()}-${Math.random().toString(36).slice(-6)}-${index}`;
+						
+						// 立即创建并插入图片预览
+						const img = document.createElement('img');
+						img.src = path; // 使用临时路径作为预览
+						img.id = imageId;
+						img.style.maxWidth = '100%';
+						img.dataset.status = 'uploading'; // 标记为正在上传
+						
+						// 添加上传中的视觉提示
+						img.style.filter = 'opacity(0.7)';
+						img.style.border = '2px dashed #ccc';
+						
+						// 在光标位置插入图片
+						const currentRange = savedRange.cloneRange();
+						currentRange.deleteContents();
+						currentRange.insertNode(img);
+						
+						// 将光标移动到图片后面
+						currentRange.setStartAfter(img);
+						currentRange.setEndAfter(img);
+						selection.removeAllRanges();
+						selection.addRange(currentRange);
+						
+						// 为预览图片添加点击事件
+						this.setupEditorImagePreview();
+						
+						// 异步上传图片
+						this.uploadImageAsync(path, imageId);
+					});
+				}
+			});
 		},
 		
 		// 提交博客
@@ -211,6 +953,68 @@ export default {
 				return;
 			}
 			
+			// 检查是否有正在上传的图片
+			const uploadingImages = editor.querySelectorAll('img[data-status="uploading"]');
+			if (uploadingImages.length > 0) {
+				uni.showModal({
+					title: '图片上传中',
+					content: `有${uploadingImages.length}张图片正在上传，是否等待上传完成后再发布？`,
+					confirmText: '等待上传',
+					cancelText: '立即发布',
+					success: (res) => {
+						if (res.confirm) {
+							// 用户选择等待上传完成
+							uni.showLoading({
+								title: '等待图片上传...',
+								mask: true
+							});
+							
+							// 创建一个检查函数，每秒检查一次是否所有图片都已上传完成
+							const checkInterval = setInterval(() => {
+								const stillUploading = editor.querySelectorAll('img[data-status="uploading"]');
+								if (stillUploading.length === 0) {
+									// 所有图片已上传完成
+									clearInterval(checkInterval);
+									uni.hideLoading();
+									this.finalizeSubmit();
+								}
+							}, 1000);
+							
+							// 设置最长等待时间（30秒）
+							setTimeout(() => {
+								clearInterval(checkInterval);
+								uni.hideLoading();
+								uni.showModal({
+									title: '上传超时',
+									content: '部分图片上传时间过长，您可以选择继续等待或立即发布（未上传完成的图片将显示为本地预览）',
+									confirmText: '立即发布',
+									cancelText: '继续等待',
+									success: (res) => {
+										if (res.confirm) {
+											this.finalizeSubmit();
+										} else {
+											// 继续等待，重新开始检查
+											this.submitBlog();
+										}
+									}
+								});
+							}, 30000);
+						} else {
+							// 用户选择立即发布
+							this.finalizeSubmit();
+						}
+					}
+				});
+			} else {
+				// 没有正在上传的图片，直接发布
+				this.finalizeSubmit();
+			}
+		},
+		
+		// 完成博客提交
+		async finalizeSubmit() {
+			const editor = document.querySelector('.blog-editor');
+			
 			try {
 				// 获取编辑器中的所有图片
 				const images = [];
@@ -219,9 +1023,39 @@ export default {
 					images.push(img.src);
 				});
 				
+				// 处理编辑器内容，替换所有包装器
+				let content = editor.innerHTML;
+				const tempDiv = document.createElement('div');
+				tempDiv.innerHTML = content;
+				
+				// 处理所有图片包装器
+				const wrappers = tempDiv.querySelectorAll('div[id$="-wrapper"]');
+				wrappers.forEach(wrapper => {
+					const img = wrapper.querySelector('img');
+					if (img) {
+						wrapper.parentNode.insertBefore(img, wrapper);
+						wrapper.remove();
+					}
+				});
+				
+				// 移除所有上传标签
+				const labels = tempDiv.querySelectorAll('div[id$="-label"]');
+				labels.forEach(label => label.remove());
+				
+				// 清理图片属性
+				const allImages = tempDiv.querySelectorAll('img');
+				allImages.forEach(img => {
+					// 移除状态属性和内联样式
+					img.removeAttribute('data-status');
+					img.style.filter = '';
+					img.style.border = '';
+					// 移除可能添加的点击事件处理
+					img.removeAttribute('onclick');
+				});
+				
 				let action = 'create';
 				let data = {
-					content: editor.innerHTML,
+					content: tempDiv.innerHTML,
 					images: images
 				};
 				
@@ -230,6 +1064,12 @@ export default {
 					action = 'update';
 					data.id = this.editingBlogId;
 				}
+				
+				// 显示加载提示
+				uni.showLoading({
+					title: '保存中...',
+					mask: true
+				});
 				
 				// 保存博客内容到数据库
 				const result = await uniCloud.callFunction({
@@ -240,6 +1080,9 @@ export default {
 					}
 				});
 				
+				uni.hideLoading();
+				
+				console.log('result::: ', result);
 				if (result.result.code === 200) {
 					uni.showToast({
 						title: this.editingBlogId ? '更新成功' : '发布成功',
@@ -289,6 +1132,15 @@ export default {
 					} else {
 						this.blogList = [...this.blogList, ...blogs];
 					}
+					
+					// 在博客列表加载完成后，为图片添加点击事件并检查内容高度
+					this.$nextTick(() => {
+						this.blogList.forEach(blog => {
+							// 初始化needsMask属性
+							blog.needsMask = false;
+							this.setupImagePreview(blog);
+						});
+					});
 				} else {
 					throw new Error(result.result.msg);
 				}
@@ -317,117 +1169,19 @@ export default {
 			return date.toLocaleString();
 		},
 
-		deleteImage(index) {
-			this.newBlog.images.splice(index, 1);
-		},
-		
-		// 生成时间线数据
-		generateTimelineData() {
-			const data = [];
-			const yearMap = new Map();
-			this.blogList.forEach(blog => {
-				const date = new Date(blog.createTime);
-				const year = date.getFullYear();
-				const month = date.getMonth() + 1;
-				
-				if (!yearMap.has(year)) {
-					yearMap.set(year, new Set());
-					data.push({
-						type: 'year',
-						label: year,
-						year,
-						active: false
-					});
-				}
-				
-				const monthSet = yearMap.get(year);
-				if (!monthSet.has(month)) {
-					monthSet.add(month);
-					data.push({
-						type: 'month',
-						label: month,
-						year,
-						month,
-						active: false
-					});
-				}
-			});
-			
-			this.timelineData = data;
-		},
-		
-		// 监听滚动更新时间线
-		onScroll(e) {
-			const scrollTop = e.detail.scrollTop;
-			const query = uni.createSelectorQuery();
-			this.blogList.forEach(blog => {
-				query.select(`#blog-${blog._id}`).boundingClientRect();
-			});
-			query.exec(res => {
-				const rects = res.filter(r => r);
-				const currentRect = rects.find(r => r.top >= 0);
-				if (currentRect) {
-					const blog = this.blogList[rects.indexOf(currentRect)];
-					const date = new Date(blog.createTime);
-					const year = date.getFullYear();
-					const month = date.getMonth() + 1;
-					this.timelineData.forEach(item => {
-						if (item.type === 'year') {
-							item.active = (item.year === year);
-						} else if (item.type === 'month') {
-							item.active = (item.year === year && item.month === month);
-						}
-					});
-				}
-			});
-		},
-		
-		// 滚动到指定年月
-		scrollToYearMonth(item) {
-			const { year, month } = item;
-			const targetBlog = this.blogList.find(blog => {
-				const date = new Date(blog.createTime);
-				return date.getFullYear() === year && (!month || date.getMonth() + 1 === month);
-			});
-			
-			if (targetBlog) {
-				const query = uni.createSelectorQuery();
-				query.select(`#blog-${targetBlog._id}`).boundingClientRect();
-				query.selectViewport().boundingClientRect();
-				query.exec(res => {
-					if (res[0] && res[1]) {
-						const blogRect = res[0];
-						const viewportRect = res[1];
-						const scrollTop = blogRect.top - viewportRect.top + this.scrollTop;
-						
-						// 使用平滑滚动
-						this.scrollTop = scrollTop;
-						
-						// 显示时间线
-						this.isTimelineVisible = true;
-						
-						// 1秒后隐藏时间线
-						if (this.scrollTimer) {
-							clearTimeout(this.scrollTimer);
-						}
-						this.scrollTimer = setTimeout(() => {
-							this.isTimelineVisible = false;
-						}, 1000);
-						
-						// 高亮对应博文时间
-						this.blogList.forEach(blog => blog.timeHighlight = false);
-						targetBlog.timeHighlight = true;
-						setTimeout(() => {
-							targetBlog.timeHighlight = false;
-						}, 1000);
-					}
-				});
-			}
-		},
+			// 切换展开/收起状态
 		
 		// 切换展开/收起状态
 		toggleExpand(blog) {
 			blog.isExpanded = !blog.isExpanded;
+			// 在展开/收起状态变化后，重新设置图片点击事件和检查内容高度
+			this.$nextTick(() => {
+				this.setupImagePreview(blog);
+				// 如果收起状态，需要重新检查是否需要遮罩层
+				if (!blog.isExpanded) {
+					this.checkContentHeight(blog);
+				}
+			});
 		},
 		
 		// 编辑博客
@@ -538,12 +1292,80 @@ export default {
 					icon: 'none'
 				});
 			}
+		},
+		clearEditor() {
+			const editor = document.querySelector('.blog-editor');
+			if (editor) {
+				editor.innerHTML = '';
+			}
+			this.editingBlogId = null;
+			uni.showToast({
+				title: '已清空编辑器',
+				icon: 'none'
+			});
 		}
 	}
 }
 </script>
-
+/* 图标样式 */
 <style lang="scss">
+/* 图片预览模态框样式 */
+.image-preview-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.9);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.3s ease;
+  
+  .preview-image {
+    max-width: 90%;
+    max-height: 90%;
+    object-fit: contain;
+    border-radius: 8px;
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+    animation: scaleIn 0.3s ease;
+  }
+  
+  .close-preview-btn {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background-color: rgba(255, 255, 255, 0.2);
+    color: white;
+    font-size: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    
+    &:hover {
+      background-color: rgba(255, 255, 255, 0.3);
+      transform: scale(1.1);
+    }
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 /* 图标样式 */
 .action-icon {
   width: 32rpx;
@@ -608,72 +1430,6 @@ page {
 			background-color: transparent;
 		}
 	}
-	
-	.timeline {
-		position: fixed;
-		right: calc(50% - 250px);
-		top: 50%;
-		transform: translateY(-50%) translateX(250%);
-		width: 120rpx;
-		height: 60vh;
-		padding: 20rpx 0;
-		background: rgba(255, 255, 255, 0.95);
-		border-radius: 60rpx;
-		box-shadow: 0 4rpx 20rpx rgba(0, 0, 0, 0.1);
-		backdrop-filter: blur(10px);
-		opacity: 0;
-		transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-		z-index: 99;
-		pointer-events: none;
-		overflow: hidden;
-		
-		&.timeline-show {
-			transform: translateY(-50%) translateX(150%);
-			opacity: 1;
-			pointer-events: auto;
-		}
-		
-		.timeline-item {
-			padding: 15rpx;
-			text-align: center;
-			transition: all 0.3s ease;
-			position: relative;
-			margin: 10rpx 0;
-			display: flex;
-			flex-direction: column;
-			align-items: center;
-			cursor: pointer;
-			
-			&:hover {
-				transform: scale(1.1);
-				
-				.timeline-year,
-				.timeline-month {
-					color: #ff9a9e;
-				}
-				
-				&::before {
-					transform: translate(-50%, -50%) scale(1.2);
-					box-shadow: 0 0 10rpx rgba(255, 154, 158, 0.5);
-				}
-			}
-			
-			&.active {
-				&::before {
-					width: 16rpx;
-					height: 16rpx;
-					background: #ff9a9e;
-					box-shadow: 0 0 10rpx rgba(255, 154, 158, 0.5);
-				}
-				
-				.timeline-year,
-				.timeline-month {
-					color: #ff9a9e;
-					font-weight: bold;
-				}
-			}
-		}
-	}
 }
 
 .blog-item {
@@ -685,8 +1441,6 @@ page {
 	transform: translateY(20rpx);
 	animation: fadeIn 0.5s ease forwards;
 	border: 1rpx solid #e8e8e8;
-
-
 	
 	&.editor {
 		.editor-header {
@@ -713,31 +1467,53 @@ page {
 		}
 	}
 	
-	.blog-content-wrapper {
-		position: relative;
-		max-height: 200px;
-		overflow: hidden;
-		transition: max-height 0.3s ease;
-		
-		&.expanded {
-			max-height: none;
-		}
-		
-		.dblclick-catcher {
-			position: absolute;
-			left: 0; top: 0; right: 0; bottom: 0;
-			z-index: 2;
-			background: transparent;
-		}
-		.blog-content {
-			position: relative;
-			z-index: 1;
-			font-size: 28rpx;
-			line-height: 1.6;
-			color: #333;
-			white-space: pre-wrap;
-		}
-	}
+			.blog-content-wrapper {
+				position: relative;
+				max-height: 200px;
+				overflow: hidden;
+				transition: max-height 0.3s ease;
+			
+				&.expanded {
+					max-height: none;
+				
+					.content-mask {
+						display: none;
+					}
+				}
+			
+				.blog-content {
+					position: relative;
+					z-index: 1;
+					font-size: 28rpx;
+					line-height: 1.6;
+					color: #333;
+					white-space: pre-wrap;
+				}
+			
+				.content-mask {
+					position: absolute;
+					left: 0;
+					right: 0;
+					bottom: 0;
+					height: 40rpx;
+					background: linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0.9) 70%, rgba(255,255,255,1) 100%);
+					z-index: 3;
+					display: flex;
+					align-items: flex-end;
+					justify-content: center;
+					padding-bottom: 10rpx;
+					cursor: pointer;
+				
+					&::after {
+						content: '点击展开';
+						font-size: 24rpx;
+						color: #999;
+						background: rgba(255, 255, 255, 0.8);
+						padding: 4rpx 20rpx;
+						border-radius: 30rpx;
+					}
+				}
+			}
 	
 	.blog-footer {
 		display: flex;
@@ -759,14 +1535,14 @@ page {
 		}
 		
 		.blog-actions {
-			display: none;
+			display: flex;
 			align-items: center;
 			
 			.action-btn {
+				display: none;
 				width: 60rpx;
 				height: 60rpx;
 				border-radius: 50%;
-				display: flex;
 				align-items: center;
 				justify-content: center;
 				margin-left: 10rpx;
@@ -815,10 +1591,8 @@ page {
 	}
 }
 
-.blog-item:hover {
-	.blog-actions {
-		display: flex;
-	}
+.blog-item:hover .blog-footer .blog-actions .action-btn {
+	display: flex;
 }
 
 .empty-state {
@@ -923,7 +1697,7 @@ page {
 		min-height: 80px;
 		width: 100%;
 		background: #fafbfc;
-		border-radius: 12px;
+		border-radius: 12px 12px 0 0;
 		padding: 18px 14px;
 		font-size: 16px;
 		color: #333;
@@ -941,6 +1715,99 @@ page {
 			color: #999;
 		}
 	}
+	
+		/* 编辑器工具栏样式 */
+	.editor-toolbar {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 12rpx 20rpx;
+		background-color: #fafbfc;
+		border-radius: 0 0 12px 12px;
+		border-top: 1px solid #f0f0f0;
+		
+		.toolbar-actions {
+			display: flex;
+			align-items: center;
+			gap: 10rpx;
+		}
+
+		.toolbar-btn {
+			display: flex;
+			align-items: center;
+			padding: 12rpx 24rpx;
+			border-radius: 8rpx;
+			cursor: pointer;
+			transition: all 0.2s ease;
+			
+			.toolbar-icon {
+				width: 40rpx;
+				height: 40rpx;
+				margin-right: 8rpx;
+			}
+			
+			.toolbar-text {
+				font-size: 28rpx;
+			}
+			
+			&.image-btn {
+				color: #1890ff;
+				background-color: rgba(24, 144, 255, 0.1);
+				
+				&:active {
+					background-color: rgba(24, 144, 255, 0.2);
+				}
+			}
+			
+			&.clear-btn {
+				color: #999;
+				background-color: rgba(0, 0, 0, 0.05);
+
+				&:active {
+					background-color: rgba(0, 0, 0, 0.1);
+				}
+			}
+
+			&.submit-btn {
+				color: white;
+				background-color: #ff9a9e;
+				padding: 12rpx 36rpx;
+				
+				&:active {
+					background-color: #ff7c82;
+				}
+			}
+		}
+	}
+}
+
+/* 上传状态指示器样式 */
+.upload-status-indicator {
+	margin-top: 16rpx;
+	padding: 16rpx;
+	background-color: #e6f7ff;
+	border-radius: 8rpx;
+	font-size: 24rpx;
+	color: #1890ff;
+	display: flex;
+	align-items: center;
+}
+
+/* 拖放提示样式 */
+.drag-drop-hint {
+	font-size: 24rpx;
+	color: #999;
+	margin-top: 16rpx;
+	text-align: center;
+	padding: 8rpx;
+	background-color: #f9f9f9;
+	border-radius: 8rpx;
+}
+
+/* 添加旋转动画 */
+@keyframes spin {
+	0% { transform: rotate(0deg); }
+	100% { transform: rotate(360deg); }
 }
 
 
