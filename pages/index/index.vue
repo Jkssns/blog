@@ -2,7 +2,7 @@
 	<view class="blog-container">
 		<!-- 图片预览弹窗 -->
 		<view class="image-preview-modal" v-if="showImagePreview" @click="closeImagePreview">
-			<image 
+			<image
 				class="preview-image" 
 				:src="previewImageUrl" 
 				mode="aspectFit"
@@ -10,9 +10,9 @@
 			></image>
 			<view class="close-preview-btn" @click="closeImagePreview">×</view>
 		</view>
-		
+
 		<!-- 博客列表 -->
-		<scroll-view 
+		<scroll-view
 			scroll-y 
 			class="blog-list"
 			@scrolltolower="loadMore"
@@ -49,16 +49,16 @@
 					</view>
 				</view>
 			</view>
-			
+
 			<!-- 空状态 -->
 			<view class="empty-state" v-if="blogList.length === 0">
 				<image src="/static/empty.png" mode="aspectFit" class="empty-image"></image>
 				<text class="empty-text">还没有任何博客内容</text>
 				<text class="empty-subtext">在上方输入框中写下你的想法吧</text>
 			</view>
-			
+
 			<!-- 博客列表 -->
-			<view 
+			<view
 				v-for="(blog, index) in blogList" 
 				@click="toggleExpand(blog)"
 				:key="blog._id"
@@ -121,8 +121,8 @@ export default {
 	onLoad() {
 		this.loadBlogs()
 	},
-	
-	mounted() {
+
+		mounted() {
 		// 在组件挂载后，初始化编辑器中的图片点击事件
 		this.setupEditorImagePreview();
 		// 初始化拖放功能
@@ -130,8 +130,14 @@ export default {
 		// 添加CSS动画
 		this.addCssAnimations();
 	},
+
+	beforeDestroy() {
+		// 确保在组件销毁前隐藏所有loading和toast
+		uni.hideLoading();
+		uni.hideToast();
+	},
 	methods: {
-		
+
 		// 处理键盘事件，Ctrl+Enter提交
 		handleKeyDown(e) {
 			// 如果按下的是回车键且同时按下了Ctrl键
@@ -159,21 +165,21 @@ export default {
 				loop: true // 循环预览
 			});
 		},
-		
+
 		// 检查内容高度，决定是否需要遮罩层
 		checkContentHeight(blog) {
 			this.$nextTick(() => {
 				const contentEl = document.querySelector(`#blog-content-${blog._id}`);
 				if (!contentEl) return;
-				
+
 				// 获取内容实际高度
 				const contentHeight = contentEl.scrollHeight;
-				
+
 				// 如果内容高度超过200px，则需要遮罩层
 				blog.needsMask = contentHeight > 200;
 			});
 		},
-		
+
 		// 为博客内容中的图片添加点击事件
 		setupImagePreview(blog) {
 			// 使用nextTick确保DOM已更新
@@ -214,8 +220,8 @@ export default {
 				this.checkContentHeight(blog);
 			});
 		},
-		
-		// 为编辑器中的图片添加点击事件
+
+				// 为编辑器中的图片设置样式，但不添加预览功能
 		setupEditorImagePreview() {
 			// 使用nextTick确保DOM已更新
 			this.$nextTick(() => {
@@ -227,40 +233,31 @@ export default {
 				const images = editor.querySelectorAll('img');
 				if (!images.length) return;
 				
-				// 为每个图片添加点击事件
+				// 为每个图片设置样式，但不添加预览功能
 				images.forEach(img => {
-					// 如果图片正在上传或上传失败，不添加预览功能
-					if (img.dataset.status === 'uploading' || img.dataset.status === 'failed') {
-						return;
-					}
-					
-					// 移除旧的事件监听器（如果有）
+					// 移除所有可能存在的点击事件
 					const oldClickHandler = img._clickHandler;
 					if (oldClickHandler) {
 						img.removeEventListener('click', oldClickHandler);
+						img._clickHandler = null;
 					}
-					
-					// 创建新的事件处理函数
-					const clickHandler = (e) => {
-						e.stopPropagation(); // 阻止事件冒泡
-						this.previewEditorImage(img.src);
-					};
-					
-					// 保存事件处理函数引用，以便后续移除
-					img._clickHandler = clickHandler;
-					
-					// 添加新的事件监听器
-					img.addEventListener('click', clickHandler);
-					
-					// 添加样式，表明图片可点击
-					img.style.cursor = 'zoom-in';
+
+					// 如果是上传失败的图片，保留点击重试功能
+					if (img.dataset.status === 'failed') {
+						img.style.cursor = 'pointer';
+						img.title = '点击重试上传';
+					} else {
+						// 移除鼠标悬停效果
+						img.style.cursor = 'default';
+						img.removeAttribute('title');
+					}
 				});
 				
 				// 更新编辑器状态指示
 				this.updateEditorStatus();
 			});
 		},
-		
+
 		// 预览博客中的图片
 		previewBlogImages(blog, current) {
 			// 获取博客内容元素
@@ -279,19 +276,19 @@ export default {
 				loop: true // 循环预览
 			});
 		},
-		
-		// 内容变化
+
+				// 内容变化
 		onContentChange(e) {
 			this.newBlog.content = e.target.innerHTML;
-			// 在内容变化后，为编辑器中的图片添加点击事件
+			// 在内容变化后，为编辑器中的图片设置样式
 			this.setupEditorImagePreview();
 		},
-		
+
 		// 处理编辑器粘贴事件
 		async onEditorPaste(e) {
 			// 阻止默认粘贴行为
 			e.preventDefault();
-			
+
 			if (this.isProcessingPaste) return;
 			this.isProcessingPaste = true;
 			
@@ -315,15 +312,6 @@ export default {
 					hasImages = true;
 					break;
 				}
-			}
-			
-			// 如果有图片，显示提示
-			if (hasImages) {
-				uni.showToast({
-					title: '正在处理图片...',
-					icon: 'loading',
-					duration: 1000
-				});
 			}
 
 			try {
@@ -367,7 +355,7 @@ export default {
 								
 								resolve();
 							};
-							
+
 							reader.readAsDataURL(file);
 						});
 					} else if (items[i].type === 'text/plain' || items[i].type === 'text/html') {
@@ -396,17 +384,17 @@ export default {
 				});
 			} finally {
 				this.isProcessingPaste = false;
-				
+
 				// 更新编辑器状态
 				this.updateEditorStatus();
 			}
 		},
-		
+
 		// 异步上传图片
 		async uploadImageAsync(dataUrl, imageId) {
 			// 增加待上传图片计数
 			this.pendingUploads++;
-			
+
 			try {
 				// 显示上传进度提示
 				const img = document.getElementById(imageId);
@@ -415,19 +403,8 @@ export default {
 					return;
 				}
 				
-				// 添加上传中的提示文本
-				const uploadingLabel = document.createElement('div');
-				uploadingLabel.id = `${imageId}-label`;
-				uploadingLabel.style.position = 'absolute';
-				uploadingLabel.style.top = '50%';
-				uploadingLabel.style.left = '50%';
-				uploadingLabel.style.transform = 'translate(-50%, -50%)';
-				uploadingLabel.style.background = 'rgba(0,0,0,0.5)';
-				uploadingLabel.style.color = 'white';
-				uploadingLabel.style.padding = '4px 8px';
-				uploadingLabel.style.borderRadius = '4px';
-				uploadingLabel.style.fontSize = '12px';
-				uploadingLabel.textContent = '上传中...';
+								// 使用uni-app的方式添加上传中的视觉提示
+				img.dataset.uploading = 'true';
 				
 				// 创建一个包装容器，使其成为相对定位的容器
 				const wrapper = document.createElement('div');
@@ -438,9 +415,7 @@ export default {
 				// 将图片包装在容器中
 				img.parentNode.insertBefore(wrapper, img);
 				wrapper.appendChild(img);
-				wrapper.appendChild(uploadingLabel);
-				
-				// 执行上传
+								// 执行上传（后台上传，但不替换图片地址）
 				const uploadResult = await uniCloud.uploadFile({
 					filePath: dataUrl,
 					cloudPath: `blog/${Date.now()}-${Math.random().toString(36).slice(-6)}.png`,
@@ -448,9 +423,11 @@ export default {
 					fileType: 'image'
 				});
 				
-				// 上传成功，更新图片
+				// 上传成功，但保留本地图片显示，只记录云端地址
 				if (img) {
-					img.src = uploadResult.fileID;
+					// 不替换src，保留本地图片显示
+					// 但在dataset中记录云端地址，用于后续提交
+					img.dataset.cloudSrc = uploadResult.fileID;
 					img.dataset.status = 'uploaded';
 					img.style.filter = '';
 					img.style.border = '';
@@ -469,16 +446,6 @@ export default {
 				
 				// 重新设置图片点击事件
 				this.setupEditorImagePreview();
-				
-				// 显示上传成功提示（如果是第一张图片）
-				if (this.pendingUploads === 1) {
-					uni.showToast({
-						title: '图片上传成功',
-						icon: 'success',
-						duration: 1000
-					});
-				}
-				
 			} catch (error) {
 				console.error('图片上传失败', error);
 				
@@ -494,39 +461,27 @@ export default {
 				img.style.border = '2px solid #ff4d4f';
 				img.dataset.status = 'failed';
 				
-				// 更新或添加失败标签
-				let failLabel = document.getElementById(`${imageId}-label`);
-				if (failLabel) {
-					failLabel.textContent = '上传失败，点击重试';
-					failLabel.style.background = 'rgba(255,77,79,0.7)';
-				} else {
-					failLabel = document.createElement('div');
-					failLabel.id = `${imageId}-label`;
-					failLabel.style.position = 'absolute';
-					failLabel.style.top = '50%';
-					failLabel.style.left = '50%';
-					failLabel.style.transform = 'translate(-50%, -50%)';
-					failLabel.style.background = 'rgba(255,77,79,0.7)';
-					failLabel.style.color = 'white';
-					failLabel.style.padding = '4px 8px';
-					failLabel.style.borderRadius = '4px';
-					failLabel.style.fontSize = '12px';
-					failLabel.textContent = '上传失败，点击重试';
-					
-					// 确保有包装器
-					let wrapper = document.getElementById(`${imageId}-wrapper`);
-					if (!wrapper) {
-						wrapper = document.createElement('div');
-						wrapper.id = `${imageId}-wrapper`;
-						wrapper.style.position = 'relative';
-						wrapper.style.display = 'inline-block';
-						img.parentNode.insertBefore(wrapper, img);
-						wrapper.appendChild(img);
-					}
-					
-					wrapper.appendChild(failLabel);
+								// 标记图片为上传失败状态
+				img.dataset.status = 'failed';
+
+				// 确保有包装器
+				let wrapper = document.getElementById(`${imageId}-wrapper`);
+				if (!wrapper) {
+					wrapper = document.createElement('div');
+					wrapper.id = `${imageId}-wrapper`;
+					wrapper.style.position = 'relative';
+					wrapper.style.display = 'inline-block';
+					img.parentNode.insertBefore(wrapper, img);
+					wrapper.appendChild(img);
 				}
 				
+				// 使用uni-app的提示功能
+								uni.showToast({
+					title: '图片上传失败，点击图片重试',
+					icon: 'none',
+					duration: 2000
+				});
+
 				// 添加点击重试功能
 				img.onclick = (e) => {
 					e.stopPropagation();
@@ -534,76 +489,41 @@ export default {
 					img.dataset.status = 'uploading';
 					this.uploadImageAsync(img.src, imageId);
 				};
-				
-				uni.showToast({
-					title: '图片上传失败，可点击图片重试',
-					icon: 'none',
-					duration: 2000
-				});
 			} finally {
 				// 减少待上传图片计数
 				this.pendingUploads--;
-				
+
 				// 更新编辑器状态指示
 				this.updateEditorStatus();
 			}
 		},
-		
-		// 更新编辑器状态
+
+				// 更新编辑器状态
 		updateEditorStatus() {
 			// 获取提交按钮元素
 			const submitBtn = document.querySelector('.submit-btn');
 			if (!submitBtn) return;
 			
-			// 如果有图片正在上传，禁用提交按钮
+			// 如果有图片正在上传，禁用提交按钮并显示提示
 			if (this.pendingUploads > 0) {
 				submitBtn.style.opacity = '0.5';
 				submitBtn.style.pointerEvents = 'none';
 				
-				// 显示上传状态指示器
-				let statusIndicator = document.querySelector('.upload-status-indicator');
-				if (!statusIndicator) {
-					statusIndicator = document.createElement('div');
-					statusIndicator.className = 'upload-status-indicator';
-					const editor = document.querySelector('.blog-editor');
-					if (editor && editor.parentNode) {
-						editor.parentNode.insertBefore(statusIndicator, editor.nextSibling);
-					}
-				}
-				
-				// 创建加载图标
-				let loadingIcon = statusIndicator.querySelector('.loading-icon');
-				if (!loadingIcon) {
-					loadingIcon = document.createElement('span');
-					loadingIcon.className = 'loading-icon';
-					loadingIcon.style.display = 'inline-block';
-					loadingIcon.style.width = '16px';
-					loadingIcon.style.height = '16px';
-					loadingIcon.style.border = '2px solid #1890ff';
-					loadingIcon.style.borderTopColor = 'transparent';
-					loadingIcon.style.borderRadius = '50%';
-					loadingIcon.style.animation = 'spin 1s linear infinite';
-					loadingIcon.style.marginRight = '8px';
-					statusIndicator.prepend(loadingIcon);
-				}
-				
-				// 更新状态文本
-				statusIndicator.innerHTML = '';
-				statusIndicator.appendChild(loadingIcon);
-				statusIndicator.appendChild(document.createTextNode(`正在上传 ${this.pendingUploads} 张图片，请稍候...`));
+				// 使用uni-app的loading提示
+				uni.showLoading({
+					title: `正在上传 ${this.pendingUploads} 张图片...`,
+					mask: false
+				});
 			} else {
 				// 恢复提交按钮
 				submitBtn.style.opacity = '1';
 				submitBtn.style.pointerEvents = 'auto';
 				
-				// 移除上传状态指示器
-				const statusIndicator = document.querySelector('.upload-status-indicator');
-				if (statusIndicator) {
-					statusIndicator.remove();
-				}
+				// 隐藏loading提示
+				uni.hideLoading();
 			}
 		},
-		
+
 		// 设置编辑器的拖放功能
 		setupEditorDragDrop() {
 			const editor = document.querySelector('.blog-editor');
@@ -640,15 +560,6 @@ export default {
 						});
 						return;
 					}
-					
-					// 显示拖放提示
-					let dragDropHint = document.querySelector('.drag-drop-hint');
-					if (!dragDropHint) {
-						dragDropHint = document.createElement('div');
-						dragDropHint.className = 'drag-drop-hint';
-						editor.parentNode.insertBefore(dragDropHint, editor.nextSibling);
-					}
-					dragDropHint.textContent = `正在处理 ${imageFiles.length} 张图片...`;
 					
 					// 处理每个图片文件
 					for (const file of imageFiles) {
@@ -706,12 +617,7 @@ export default {
 						}
 					}
 					
-					// 移除拖放提示
-					setTimeout(() => {
-						if (dragDropHint && dragDropHint.parentNode) {
-							dragDropHint.parentNode.removeChild(dragDropHint);
-						}
-					}, 3000);
+										// uni-app的提示会自动消失，不需要手动移除
 				}
 			});
 			
@@ -725,7 +631,7 @@ export default {
 			`;
 			document.head.appendChild(style);
 		},
-		
+
 		// 设置编辑器图片预览功能
 		setupEditorImagePreview() {
 			const editor = document.querySelector('.blog-editor');
@@ -751,19 +657,19 @@ export default {
 				};
 				img._previewClickHandler = clickHandler;
 				img.addEventListener('click', clickHandler);
-				
+
 				// 添加鼠标悬停效果
 				img.style.cursor = 'pointer';
 				img.title = '点击查看大图';
 			});
 		},
-		
+
 		// 关闭图片预览
 		closeImagePreview() {
 			this.showImagePreview = false;
 			this.previewImageUrl = '';
 		},
-		
+
 		// 更新编辑器状态指示
 		updateEditorStatus() {
 			const editor = document.querySelector('.blog-editor');
@@ -820,7 +726,7 @@ export default {
 				}
 			}
 		},
-		
+
 		// 添加CSS动画
 		addCssAnimations() {
 			// 检查是否已存在动画样式
@@ -842,44 +748,44 @@ export default {
 						transform: translateY(0);
 					}
 				}
-			
+
 				@keyframes spin {
 					0% { transform: rotate(0deg); }
 					100% { transform: rotate(360deg); }
 				}
-			
+
 				@keyframes pulse {
 					0% { transform: scale(1); }
 					50% { transform: scale(1.05); }
 					100% { transform: scale(1); }
 				}
-			
+
 				.fade-in {
 					animation: fadeIn 0.5s ease forwards;
 				}
-			
+
 				.loading-icon {
 					animation: spin 1s linear infinite;
 				}
-			
+
 				.pulse {
 					animation: pulse 1.5s ease infinite;
 				}
-			
+
 				.blog-editor img {
 					transition: all 0.3s ease;
 				}
-			
+
 				.blog-editor img:hover {
 					transform: scale(1.02);
 					box-shadow: 0 4px 12px rgba(0,0,0,0.1);
 				}
 			`;
-		
+
 			// 添加到文档头部
 			document.head.appendChild(style);
 		},
-		
+
 		// 打开图片选择器
 		openImageSelector() {
 			// 使用uni-app的选择图片API
@@ -890,15 +796,6 @@ export default {
 				success: (res) => {
 					// 获取选择的图片临时路径
 					const tempFilePaths = res.tempFilePaths;
-					
-					// 显示处理提示
-					if (tempFilePaths.length > 0) {
-						uni.showToast({
-							title: '正在处理图片...',
-							icon: 'loading',
-							duration: 1000
-						});
-					}
 					
 					// 保存当前选区
 					const selection = window.getSelection();
@@ -941,7 +838,7 @@ export default {
 				}
 			});
 		},
-		
+
 		// 提交博客
 		async submitBlog() {
 			const editor = document.querySelector('.blog-editor');
@@ -1010,17 +907,19 @@ export default {
 				this.finalizeSubmit();
 			}
 		},
-		
+
 		// 完成博客提交
 		async finalizeSubmit() {
 			const editor = document.querySelector('.blog-editor');
-			
+
 			try {
-				// 获取编辑器中的所有图片
+								// 获取编辑器中的所有图片
 				const images = [];
 				const imgElements = editor.querySelectorAll('img');
 				imgElements.forEach(img => {
-					images.push(img.src);
+					// 优先使用云端地址，如果没有则使用本地地址
+					const imageUrl = img.dataset.cloudSrc || img.src;
+					images.push(imageUrl);
 				});
 				
 				// 处理编辑器内容，替换所有包装器
@@ -1081,7 +980,7 @@ export default {
 				});
 				
 				uni.hideLoading();
-				
+
 				console.log('result::: ', result);
 				if (result.result.code === 200) {
 					uni.showToast({
@@ -1170,7 +1069,7 @@ export default {
 		},
 
 			// 切换展开/收起状态
-		
+
 		// 切换展开/收起状态
 		toggleExpand(blog) {
 			blog.isExpanded = !blog.isExpanded;
@@ -1183,7 +1082,7 @@ export default {
 				}
 			});
 		},
-		
+
 		// 编辑博客
 		editBlog(blog) {
 			// 获取编辑器元素
@@ -1202,7 +1101,7 @@ export default {
 				});
 			}
 		},
-		
+
 		// 查看编辑历史
 		viewHistory(blog) {
 			uni.showToast({
@@ -1212,7 +1111,7 @@ export default {
 			// 这里可以实现查看博客的编辑历史记录
 			// 需要后端支持存储历史版本
 		},
-		
+
 		// 确认删除
 		confirmDelete(blog) {
 			uni.showModal({
@@ -1225,7 +1124,7 @@ export default {
 				}
 			});
 		},
-		
+
 		// 删除博客
 		async deleteBlog(blog) {
 			try {
@@ -1247,6 +1146,7 @@ export default {
 					// 从列表中移除已删除的博客
 					this.blogList = this.blogList.filter(item => item._id !== blog._id);
 				} else {
+					console.log('result::: ', result);
 					throw new Error(result.result.msg);
 				}
 			} catch (e) {
@@ -1257,12 +1157,12 @@ export default {
 				});
 			}
 		},
-		
+
 		// 切换收藏状态
 		async toggleFavorite(blog) {
 			// 切换收藏状态
 			const isFavorite = !blog.isFavorite;
-			
+
 			try {
 				const result = await uniCloud.callFunction({
 					name: 'blog',
@@ -1322,7 +1222,7 @@ export default {
   align-items: center;
   justify-content: center;
   animation: fadeIn 0.3s ease;
-  
+
   .preview-image {
     max-width: 90%;
     max-height: 90%;
@@ -1331,7 +1231,7 @@ export default {
     box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
     animation: scaleIn 0.3s ease;
   }
-  
+
   .close-preview-btn {
     position: absolute;
     top: 20px;
@@ -1347,7 +1247,7 @@ export default {
     justify-content: center;
     cursor: pointer;
     transition: all 0.2s ease;
-    
+
     &:hover {
       background-color: rgba(255, 255, 255, 0.3);
       transform: scale(1.1);
@@ -1393,7 +1293,7 @@ page {
 	box-shadow: 0 4rpx 20rpx rgba(255, 8, 68, 0.3);
 	z-index: 100;
 	transition: all 0.3s ease;
-	
+
 	&:active {
 		transform: scale(0.95);
 	}
@@ -1408,24 +1308,24 @@ page {
 	height: 100vh;
 	box-sizing: border-box;
 	justify-content: center;
-	
+
 	.blog-list {
 		width: 500px;
 		height: 100%;
 		margin-right: 0;
 		box-sizing: border-box;
 		position: relative;
-		
+
 		&::-webkit-scrollbar {
 			width: 6px;
 			background-color: transparent;
 		}
-		
+
 		&::-webkit-scrollbar-thumb {
 			background-color: rgba(0, 0, 0, 0.2);
 			border-radius: 3px;
 		}
-		
+
 		&::-webkit-scrollbar-track {
 			background-color: transparent;
 		}
@@ -1441,46 +1341,46 @@ page {
 	transform: translateY(20rpx);
 	animation: fadeIn 0.5s ease forwards;
 	border: 1rpx solid #e8e8e8;
-	
+
 	&.editor {
 		.editor-header {
 			display: flex;
 			justify-content: space-between;
 			align-items: center;
 			margin-bottom: 20rpx;
-			
+
 			.editor-title {
 				color: #333;
 				font-size: 32rpx;
 				font-weight: 500;
 			}
-			
+
 			.close-btn {
 				color: #999;
 				font-size: 40rpx;
 				padding: 10rpx;
-				
+
 				&:active {
 					color: #ff9a9e;
 				}
 			}
 		}
 	}
-	
+
 			.blog-content-wrapper {
 				position: relative;
 				max-height: 200px;
 				overflow: hidden;
 				transition: max-height 0.3s ease;
-			
+
 				&.expanded {
 					max-height: none;
-				
+
 					.content-mask {
 						display: none;
 					}
 				}
-			
+
 				.blog-content {
 					position: relative;
 					z-index: 1;
@@ -1489,7 +1389,7 @@ page {
 					color: #333;
 					white-space: pre-wrap;
 				}
-			
+
 				.content-mask {
 					position: absolute;
 					left: 0;
@@ -1503,7 +1403,7 @@ page {
 					justify-content: center;
 					padding-bottom: 10rpx;
 					cursor: pointer;
-				
+
 					&::after {
 						content: '点击展开';
 						font-size: 24rpx;
@@ -1514,7 +1414,7 @@ page {
 					}
 				}
 			}
-	
+
 	.blog-footer {
 		display: flex;
 		justify-content: space-between;
@@ -1523,7 +1423,7 @@ page {
 		padding-top: 20rpx;
 		height: 60rpx;
 		border-top: 1rpx solid #f0f0f0;
-		
+
 		.blog-time {
 			font-size: 24rpx;
 			color: #999;
@@ -1533,11 +1433,11 @@ page {
 				font-weight: bold;
 			}
 		}
-		
+
 		.blog-actions {
 			display: flex;
 			align-items: center;
-			
+
 			.action-btn {
 				display: none;
 				width: 60rpx;
@@ -1549,34 +1449,34 @@ page {
 				transition: all 0.2s ease;
 				background: #f5f5f5;
 				cursor: pointer;
-				
+
 				.action-icon {
 					width: 32rpx;
 					height: 32rpx;
 				}
-				
+
 				&:active {
 					transform: scale(0.9);
 				}
-				
+
 				&.edit-btn {
 					&:hover, &:active {
 						background: #e3f2fd;
 					}
 				}
-				
+
 				&.history-btn {
 					&:hover, &:active {
 						background: #e8f5e9;
 					}
 				}
-				
+
 				&.delete-icon {
 					&:hover, &:active {
 						background: #ffebee;
 					}
 				}
-				
+
 				&.favorite-btn {
 					&:hover, &:active {
 						background: #fff8e1;
@@ -1585,7 +1485,7 @@ page {
 			}
 		}
 	}
-	
+
 	&.slide-in {
 		animation: slideIn 0.3s ease forwards;
 	}
@@ -1601,20 +1501,20 @@ page {
 	align-items: center;
 	justify-content: center;
 	padding: 100rpx 0;
-	
+
 	.empty-image {
 		width: 300rpx;
 		height: 300rpx;
 		margin-bottom: 30rpx;
 		opacity: 0.5;
 	}
-	
+
 	.empty-text {
 		font-size: 32rpx;
 		color: #333;
 		margin-bottom: 10rpx;
 	}
-	
+
 	.empty-subtext {
 		font-size: 28rpx;
 		color: #999;
@@ -1647,35 +1547,35 @@ page {
 @media screen and (max-width: 768px) {
 	.blog-container {
 		padding: 10rpx;
-		
+
 		.blog-list {
 			width: 100%;
 			margin-right: 0;
 		}
-		
+
 		.timeline {
 			width: 80rpx;
 			right: 20rpx;
 			height: 50vh;
-			
+
 			.timeline-item {
 				padding: 10rpx;
-				
+
 				.timeline-year {
 					font-size: 24rpx;
 				}
-				
+
 				.timeline-month {
 					font-size: 20rpx;
 				}
 			}
 		}
 	}
-	
+
 	.blog-item {
 		padding: 20rpx;
 	}
-	
+
 
 }
 
@@ -1684,15 +1584,15 @@ page {
 	animation: slideIn 0.3s ease forwards;
 	border: 1.5px solid #e8e8e8;
 	transition: border 0.2s;
-	
+
 	&:focus-within {
 		border: 1.5px solid #ff9a9e;
 	}
-	
+
 	.editor-content {
 		margin: 0;
 	}
-	
+
 	.blog-editor {
 		min-height: 80px;
 		width: 100%;
@@ -1705,17 +1605,17 @@ page {
 		transition: background 0.2s;
 		box-sizing: border-box;
 		overflow-y: auto;
-		
+
 		&:focus {
 			background: #fff;
 		}
-		
+
 		&:empty:before {
 			content: attr(placeholder);
 			color: #999;
 		}
 	}
-	
+
 		/* 编辑器工具栏样式 */
 	.editor-toolbar {
 		display: flex;
@@ -1725,7 +1625,7 @@ page {
 		background-color: #fafbfc;
 		border-radius: 0 0 12px 12px;
 		border-top: 1px solid #f0f0f0;
-		
+
 		.toolbar-actions {
 			display: flex;
 			align-items: center;
@@ -1739,26 +1639,26 @@ page {
 			border-radius: 8rpx;
 			cursor: pointer;
 			transition: all 0.2s ease;
-			
+
 			.toolbar-icon {
 				width: 40rpx;
 				height: 40rpx;
 				margin-right: 8rpx;
 			}
-			
+
 			.toolbar-text {
 				font-size: 28rpx;
 			}
-			
+
 			&.image-btn {
 				color: #1890ff;
 				background-color: rgba(24, 144, 255, 0.1);
-				
+
 				&:active {
 					background-color: rgba(24, 144, 255, 0.2);
 				}
 			}
-			
+
 			&.clear-btn {
 				color: #999;
 				background-color: rgba(0, 0, 0, 0.05);
@@ -1772,7 +1672,7 @@ page {
 				color: white;
 				background-color: #ff9a9e;
 				padding: 12rpx 36rpx;
-				
+
 				&:active {
 					background-color: #ff7c82;
 				}
@@ -1781,28 +1681,7 @@ page {
 	}
 }
 
-/* 上传状态指示器样式 */
-.upload-status-indicator {
-	margin-top: 16rpx;
-	padding: 16rpx;
-	background-color: #e6f7ff;
-	border-radius: 8rpx;
-	font-size: 24rpx;
-	color: #1890ff;
-	display: flex;
-	align-items: center;
-}
-
-/* 拖放提示样式 */
-.drag-drop-hint {
-	font-size: 24rpx;
-	color: #999;
-	margin-top: 16rpx;
-	text-align: center;
-	padding: 8rpx;
-	background-color: #f9f9f9;
-	border-radius: 8rpx;
-}
+/* 这里删除了不再需要的上传状态指示器和拖放提示样式，因为现在使用uni-app的原生提示功能 */
 
 /* 添加旋转动画 */
 @keyframes spin {
